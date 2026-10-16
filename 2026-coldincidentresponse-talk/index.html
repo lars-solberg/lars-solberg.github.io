@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2026 Cold Incident Response Talk</title>
+    <script type="module" crossorigin src="./assets/index-DaGbvD5G.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-ChAWyBym.css">
+  </head>
+  <body>
+    <div class="reveal">
+      <div class="slides">
+        <!-- Story and intro -->
+
+        <section class="story-slide" data-background-color="#0b1521" data-transition="fade">
+          <div class="story-shell">
+            <p class="story-kicker">Before we start</p>
+            <h2 class="story-title">The story is made up. The tools are real.</h2>
+            <div class="story-grid is-tri">
+              <div class="story-card">
+                <h3>A fictional company</h3>
+                <p>Fjordmart doesn&rsquo;t exist. Its setup is realistic, and it gets a lot right.</p>
+              </div>
+              <div class="story-card">
+                <h3>Free and open source</h3>
+                <p>Every tool shown is part of the Cloud Native Computing Foundation (CNCF).</p>
+              </div>
+              <div class="story-card">
+                <h3>Take it home</h3>
+                <p>Every example, log and manifest is linked at the end.</p>
+              </div>
+            </div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 30 (½ min)</b></li>
+              <li>Fictional, but a good story to lean on. This company did a lot of things right.</li>
+              <li>Every example, snippet and info: link at the end</li>
+              <li>All tech mentioned: free, open source, Cloud Native Computing Foundation (CNCF)</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="waiting-slide" data-background-color="#0b1521" data-transition="fade">
+          <h1 aria-label="Sleeping"><span>Z</span><span>z</span><span>z</span></h1>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 29½ (few s)</b></li>
+              <li>It seems every good on-call story starts with people being asleep.</li>
+              <li>Pretend the time is 03:59</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="wake-up-slide" data-background-color="#190e16" data-transition="fade">
+          <p class="wake-up-time">04:00</p>
+          <h1>Your phone rings.</h1>
+          <div class="call">
+            <p class="call-line is-them fragment fade-up">DNS C2 traffic detected</p>
+            <p class="call-line is-you fragment fade-up">From where?</p>
+            <p class="call-line is-them fragment fade-up">Our resolver. Its client is 10.20.4.17, asking for something cdnx</p>
+            <p class="call-line is-you fragment fade-up">10.20.4... Wait... Is that the new Kubernetes cluster...?</p>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 29 (1 min)</b></li>
+              <li>▶ ×4</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="investigate-slide" data-background-color="#0b1521" data-transition="fade">
+          <p class="investigate-time">04:07</p>
+          <h2>&ldquo;I&rsquo;m not ready for this...&rdquo;</h2>
+          <figure class="terminal fragment fade-up">
+            <figcaption>dns-resolver-01</figcaption>
+<pre><span class="p">$</span> grep cdnx /var/log/unbound/unbound.log | tail -4
+Oct 14 03:48:10 unbound[812:0] info: <b>10.20.4.17</b> traqee6ix6v5mrk7.<b>t.cdnx.example.</b> TXT IN
+Oct 14 03:48:12 unbound[812:0] info: <b>10.20.4.17</b> traqefbozgtine3g.<b>t.cdnx.example.</b> TXT IN
+Oct 14 03:48:14 unbound[812:0] info: <b>10.20.4.17</b> traqefpozb5337fb.<b>t.cdnx.example.</b> TXT IN
+Oct 14 03:48:16 unbound[812:0] info: <b>10.20.4.17</b> traqefuldbgvatjj.<b>t.cdnx.example.</b> TXT IN</pre>
+          </figure>
+          <figure class="terminal fragment fade-up">
+            <figcaption>jump-01</figcaption>
+<pre><span class="p">$</span> dig -x 10.20.4.17 +short
+<b>worker-03.k8s-prod.fjordmart.example.</b>
+
+<span class="p">$</span> curl -s "https://ipam.fjordmart.example/api/ipam/ip-addresses/?address=10.20.4.17" | jq '.results[0] | {dns_name, description}'
+{
+  "dns_name": "worker-03.k8s-prod.fjordmart.example",
+  "description": "<b>Kubernetes worker node, cluster k8s-prod</b>"
+}</pre>
+          </figure>
+          <p class="investigate-verdict fragment fade-up">10.20.4.17 is a node in the production Kubernetes cluster.</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 28 (1 min)</b></li>
+              <li>Are YOU ready for a conversation like this?</li>
+              <li>▶ unbound: you are looking around with the tools you have, you are able to verify</li>
+              <li>base32 subdomains, TXT, every 2s = indeed suspecious</li>
+              <li>▶ you check reverse dns, check ipam</li>
+              <li>▶ confirmed... A kubernetes node</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="investigate-slide is-warning" data-background-color="#0b1521" data-transition="fade">
+          <p class="investigate-time">04:12</p>
+          <h2>&ldquo;Got it. I think. I&rsquo;ll just...&rdquo;</h2>
+          <figure class="terminal">
+            <figcaption>jump-01</figcaption>
+<pre><span class="p">jump-01 $</span> ssh worker-03.k8s-prod.fjordmart.example
+<span class="p">worker-03 $</span> sudo tcpdump -ni any port 53 | grep cdnx
+04:12:31.204118 cilium_vxlan In  IP <b>10.244.5.41</b>.40211 &gt; 10.244.3.12.53: 51877+ TXT? traqeg3kq7f2xwm4.t.cdnx.example. (58)
+04:12:31.205027 ens192 Out IP <b>10.20.4.17</b>.53122 &gt; 10.20.0.53.53: 22104+ [1au] TXT? traqeg3kq7f2xwm4.t.cdnx.example. (69)
+04:12:33.207441 cilium_vxlan In  IP <b>10.244.5.41</b>.40211 &gt; 10.244.3.12.53: 51878+ TXT? traqegc5mvd4pq7a.t.cdnx.example. (58)
+04:12:33.208213 ens192 Out IP <b>10.20.4.17</b>.53122 &gt; 10.20.0.53.53: 22105+ [1au] TXT? traqegc5mvd4pq7a.t.cdnx.example. (69)
+<span class="p">worker-03 $</span> exit
+
+<span class="p">jump-01 $</span> kubectl get pods -A -o wide | grep 10.244.5.41
+<b>shop        cache-warmer</b>        1/1     Running   0     32m   10.244.5.41   worker-05   &lt;none&gt;   &lt;none&gt;
+
+<span class="p">jump-01 $</span> kubectl -n shop delete pod cache-warmer<span class="cursor" aria-hidden="true"></span></pre>
+          </figure>
+          <div class="story-grid is-quad">
+            <div class="story-card fragment fade-up">
+              <h3>Needs god mode</h3>
+              <p>Root on a production node, and cluster-wide kubectl.</p>
+            </div>
+            <div class="story-card fragment fade-up">
+              <h3>Need some luck</h3>
+              <p>Traffic was still ongoing. A pod that went quiet after 03:48 would show nothing.</p>
+            </div>
+            <div class="story-card fragment fade-up">
+              <h3>Wrong node first</h3>
+              <p>worker-03 only forwarded the DNS. The pod ran on worker-05.</p>
+            </div>
+            <div class="story-card fragment fade-up">
+              <h3>Delete = evidence gone</h3>
+              <p>The process, its memory and its files go with the pod.</p>
+            </div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 27 (1 min)</b></li>
+              <li>sysadmin reflex: ssh to the node, tcpdump</li>
+              <li>worker-03 was forwarding. You finally found the node and the pod. You want to kill it. Should you? Is this the right way?</li>
+              <li>▶ ×4 the cards</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section id="alert" class="diagram-step" data-diagram-view="full-map" data-transition="none" data-background-transition="none">
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #ef4444">
+              <h2>The complexity hurts</h2>
+              <p>especially at 04:00</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 26 (½ min)</b></li>
+              <li>"Lot of things between our pod and the resolver"</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="wake-up-slide" data-background-color="#0b1521" data-transition="fade">
+          <h1>Let&rsquo;s pause here</h1>
+          <p class="wake-up-message">It looks worse than it is.</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 25 (½ min)</b></li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="story-slide intro-slide" data-background-color="#0b1521" data-transition="fade">
+          <div class="story-shell">
+            <header class="intro-heading">
+              <p class="story-kicker">INTRO</p>
+              <h1 class="story-title">Visualizing Cloud&#8209;Native Security</h1>
+              <p class="story-lead">Kubernetes is already in our networks. Let&rsquo;s look at it together.</p>
+            </header>
+            <div class="story-grid intro-cards">
+              <div class="story-card fragment fade-up" data-fragment-index="1">
+                <h3>whoami</h3>
+                <p>Lars Solberg, Telenor<br />On-prem Kubernetes</p>
+              </div>
+              <div class="story-card fragment fade-up" data-fragment-index="2">
+                <h3>Why this talk</h3>
+                <p>I build the platform and care about securing it. That map you just saw started as a sketch for my team. It kept growing. Today we use it to replay 04:12.</p>
+              </div>
+            </div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 25 (1 min)</b></li>
+              <li>▶ whoami: Telenor, on-prem k8s platform + security</li>
+              <li>▶ internal map → shared understanding → now public</li>
+              <li>Mostly a on-prem view, but probably useful on public clouds as well</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="story-slide" data-background-color="#0b1521" data-transition="fade">
+          <div class="story-shell">
+            <p class="story-kicker">THE SECURITY MODEL HAS CHANGED</p>
+            <h2 class="story-title">Familiar threats. Different control points.</h2>
+            <p class="story-lead">Kubernetes changes where we enforce security, and how fast things move.</p>
+            <div class="story-grid is-quad">
+              <div class="story-card fragment fade-up" data-fragment-index="1">
+                <h3>The IP isn't the identity</h3>
+                <p>Pods come and go. Their IPs get reused.</p>
+              </div>
+              <div class="story-card fragment fade-up" data-fragment-index="2">
+                <h3>Your firewall may never see the traffic</h3>
+                <p>Two workloads can communicate without passing through your perimeter firewall.</p>
+              </div>
+              <div class="story-card fragment fade-up" data-fragment-index="3">
+                <h3>You delete it. It comes back.</h3>
+                <p>A controller can restart the workload you just stopped.</p>
+              </div>
+              <div class="story-card fragment fade-up" data-fragment-index="4">
+                <h3>Separate containers. Shared kernel.</h3>
+                <p>Workloads share a host kernel. Runtime restrictions and network policies keep them apart.</p>
+              </div>
+            </div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 24 (1½ min)</b></li>
+              <li>▶ IP ≠ identity, they have never been, but specially not now</li>
+              <li>▶ pod → pod never hits the firewall, two pods on same physical node</li>
+              <li>▶ delete it → Deployment recreates it</li>
+              <li>▶ one kernel per node</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="story-slide" data-background-color="#0b1521" data-transition="fade">
+          <div class="story-shell">
+            <p class="story-kicker">An honest admission</p>
+            <h2 class="story-title">Kubernetes out of the box is not secure.</h2>
+            <p class="story-lead">The controls are there. But we need to apply them.</p>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 23 (1 min)</b></li>
+              <li>controls exist, must be applied</li>
+              <li>defaults vary per distro / provider</li>
+            </ul>
+          </aside>
+        </section>
+
+        <!-- Kubernetes info and anatomy -->
+
+        <section
+            id="step-back" class="diagram-step" data-transition="none" data-background-transition="none"
+            data-diagram-state-url="https://kubesec-diagram.github.io/?menu=true&filter-hide-tags=pri-1,pri-2,pri-3,info,Access,Api,CertManager,Cnapp,ControlPlane,CronJob,CustomOperator,Ingress,legend,Logging,Namespace,Network,ProcessSecurity,SupplyChain,Workload.ContainerType,Workload.Sandbox,Workload.Vm,Workload.Volume&v=fit&tags=open&filter-level=1" 
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #ef4444">
+              <h2>Still machines</h2>
+              <p>Nodes run pods. A container is just a process.</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 22 (1 min)</b></li>
+              <li>Lets use diagrams to visualize this instead of bullets, tiny kubernetes 101</li>
+              <li>processes still bound to a single node, but they move around more</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section
+            id="anatomy" class="diagram-step" data-transition="fade" data-transition-speed="slow" data-background-transition="fade"
+            data-diagram-state-url="https://kubesec-diagram.github.io/?tags=open&filter-hide-tags=pri-1,pri-2,pri-3,info,_.Area.NodeContext,_.Item.Operator2,Access.Portal,Access.ServiceOwner,Api.Admission,Api.Apf,Api.Authn,Api.Authz,Api.Rbac,CertManager,Cnapp,CronJob,CustomOperator,Ingress,legend,Logging,Namespace,Network,Node.Observability,Node.RuntimeSecurity,ProcessSecurity,SupplyChain,Traditional,Workload.ContainerType,Workload.Sandbox,Workload.Vm,Workload.Volume&menu=true&v=0.4382,0.5,0.7978,1"
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #4285f4">
+              <h2>Who tells them what to run</h2>
+              <p>Every change goes through one API. The machines make it true.</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 21 (1½ min)</b></li>
+              <li>API in front of a database (etcd)</li>
+              <li>nodes race to match it</li>
+              <li>every change = API call = audit event = timeline</li>
+            </ul>
+          </aside>
+        </section>
+
+        <!-- Detect
+          * Find the source
+          * Find the process and what it has been doing
+          * Find who made the change, gitops
+        -->
+
+        <section class="chapter-slide is-detect" data-background-color="#0b1521" data-transition="fade" data-transition-speed="slow">
+          <h2 class="chapter-title"><span class="phase">Detect</span>Network</h2>
+          <p class="chapter-question">Where did the traffic come from?</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 19 (quick)</b></li>
+            </ul>
+          </aside>
+        </section>
+
+        <section
+          id="detect-source"
+          class="diagram-step"
+          data-diagram-state-url="https://kubesec-diagram.github.io/?tags=open&filter-hide-tags=pri-1,pri-2,pri-3,info,_.Area.NetworkUnderlay,_.Frame.NetworkUnderlay,_.Item.CiliumClusterMesh,_.Item.CiliumEgressGatewayPolicy,_.Item.ClusterNetworkPolicy,_.Item.L3IpCidrBased,_.Item.NetworkPolicyServiceMeshConfig,_.Item.OtherClusters,_.Item.OtherNodeNetwork,_.Item.Port80,_.Item.EgressGatewayIp1,_.Traffic.Ingress,Access,Api,CertManager,Cnapp,ControlPlane,CronJob,CustomOperator,Ingress,legend,Logging.Api,Logging.Instrumentation,Logging.Pod,Logging.Service,Namespace,Network.Cni.HostNetwork,Network.Cni.Underlay,Network.Ingress,Network.Service.ClusterIp,Network.Service.EndpointSlice,Node.Roles,Node.RuntimeSecurity,ProcessSecurity,SupplyChain,Traditional,Workload&menu=true"
+          data-transition="fade" data-transition-speed="slow"
+          data-background-transition="fade"
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #4285f4">
+              <h2><span class="phase">Detect</span>Network</h2>
+              <p>Where did this traffic come from?</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+
+            <span class="fragment" data-diagram-state='{"tooltip":{"slug":"Hubble","tab":"dns_flows","width":1,"scale":1.1, "position": "top"}}'></span>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 19 (1½ min)</b></li>
+              <li>Same question as 04:12, with tooling</li>
+              <li>Explain egress, cilium, hubble</li>
+              <li>▶ Hubble: cache-warmer → coredns → TXT cdnx</li>
+              <li>See pod. No IP, no SNAT guess, proper time. Can be json, contains metadata. Send to siem</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="chapter-slide is-detect" data-background-color="#0b1521" data-transition="fade" data-transition-speed="slow">
+          <h2 class="chapter-title"><span class="phase">Detect</span>Process</h2>
+          <p class="chapter-question">What ran in the pod?</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 18 (quick)</b></li>
+            </ul>
+          </aside>
+        </section>
+
+        <section
+          id="detect-process"
+          class="diagram-step"
+          data-diagram-state-url="https://kubesec-diagram.github.io/?v=0.5068,0.6685,0.5276,0.663&tags=open&filter-hide-tags=pri-1,pri-2,pri-3,info,_.Frame.Deployment,Access,Api,CertManager,ControlPlane,CronJob,CustomOperator,Ingress,legend,Logging.Api,Logging.Observability,Logging.Pod,Logging.Service,Namespace,Network,Node.Observability,Node.Roles,ProcessSecurity,SupplyChain.Git,SupplyChain.Gitops,SupplyChain.ImageBuild,SupplyChain.Sbom,SupplyChain.Scanning,SupplyChain.Signing,Traditional,Workload&menu=true"
+          data-transition="fade" data-transition-speed="slow"
+          data-background-transition="fade"
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #4285f4">
+              <h2><span class="phase">Detect</span>Process</h2>
+              <div class="tour-captions">
+                <p class="fragment fade-out" data-fragment-index="1">What could we see in the pod?</p>
+                <p class="fragment" data-fragment-index="1"><span class="fragment fade-out" data-fragment-index="3">03:41 - 19 minutes before the phone rang</span></p>
+                <p class="fragment" data-fragment-index="3">Checkpoint it, then delete it. The process is the evidence.</p>
+              </div>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+            <span class="fragment" data-fragment-index="0" data-diagram-state='{"tooltip":{"slug":"Falco","tab":"dropped_binary_rule","width":1,"scale":1.4,"position":"top"}}'></span>
+            <span class="fragment" data-fragment-index="1" data-diagram-state='{"tooltip":{"slug":"Falco","tab":"dropped_binary_alert","width":1,"scale":1.4,"position":"top"}}'></span>
+            <span class="fragment" data-fragment-index="2" data-diagram-state='{"tooltip":{"slug":"Tetragon","tab":"process_events","width":1,"scale":1.1,"position":"top"}}'></span>
+            <span class="fragment" data-fragment-index="3" data-diagram-state='{"tooltip":null,"highlight":{"tags":["_.Item.Process"]}}'></span>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 17 (3 min)</b></li>
+              <li>Lots of kernel-telemetry..</li>
+              <li>Falco = alarm. Tetragon = what happened</li>
+              <li>▶ rule: binary written after start → CRITICAL</li>
+              <li>▶ 03:41, worker-05, root, debian. In the SIEM. Nobody looked</li>
+              <li>▶ Tetragon: base64 → chmod → run. From pod spec, nothing downloaded</li>
+              <li>▶ kubelet checkpoint: process, memory, files → tar on the node</li>
+              <li>Supported in many cases, gives you a .tar you can analyze</li>
+              <li>then you can scale down your deployment, use network policies, ...</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="chapter-slide is-protect" data-background-color="#0b1521" data-transition="fade" data-transition-speed="slow">
+          <h2 class="chapter-title"><span class="phase">Protect</span>Supply chain</h2>
+          <p class="chapter-question">How did it get here?</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 14 (quick)</b></li>
+            </ul>
+          </aside>
+        </section>
+
+        <section
+          id="prevent-supplychain"
+          class="diagram-step"
+          data-diagram-state-url="https://kubesec-diagram.github.io/?tags=open&filter-hide-tags=pri-1,pri-2,pri-3,info,Api.Apf,Api.Authn,Api.Authz,Api.Controllers,Api.Objects,Api.Rbac,CertManager,ControlPlane,CronJob,CustomOperator,Ingress,legend,Logging,Namespace,Network,Node,ProcessSecurity,Traditional,Workload&menu=true&v=0.4382,0.5,0.7978,1"
+          data-transition="fade" data-transition-speed="slow"
+          data-background-transition="fade"
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #22c55e">
+              <h2><span class="phase">Protect</span>Supply chain</h2>
+              <p>Reviewed, scanned, signed</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["SupplyChain.Git","SupplyChain.Gitops"]}}'></span>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["SupplyChain.ImageBuild"]}}'></span>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["SupplyChain.Scanning","SupplyChain.Signing","SupplyChain.Sbom"]}}'></span>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["SupplyChain.Registry", "Api.Admission"]}}'></span>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 14 (2 min)</b></li>
+              <li>▶ git: 2 approvals, signed</li>
+              <li>▶ distroless, no shell</li>
+              <li>▶ scan and log</li>
+              <li>▶ images can be gated</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="chapter-slide is-protect" data-background-color="#0b1521" data-transition="fade" data-transition-speed="slow">
+          <h2 class="chapter-title"><span class="phase">Protect</span>API</h2>
+          <p class="chapter-question">Who let it in?</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 12 (quick)</b></li>
+            </ul>
+          </aside>
+        </section>
+
+        <section
+          id="prevent-api"
+          class="diagram-step"
+          data-diagram-state-url="https://kubesec-diagram.github.io/?tags=open&filter-hide-tags=pri-1,pri-2,pri-3,info,_.Link.AuthenticationToAdmissionControl,Access,Api.Apf,Api.Controllers,Api.Objects,CertManager,Cnapp,ControlPlane,CronJob,CustomOperator,Ingress,legend,Logging,Namespace,Network,Node,ProcessSecurity,SupplyChain,Traditional,Workload&menu=true"
+          data-diagram-state='{"camera":{"focus":{"tags":["Api"]},"padding":0.05}}'
+          data-transition="fade" data-transition-speed="slow"
+          data-background-transition="fade"
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #22c55e">
+              <h2><span class="phase">Protect</span>API</h2>
+              <p>A valid token. Who decided what it could do?</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+            <span class="fragment" data-diagram-state='{"tooltip":{"slug":"SecurityLogging","tab":"pod_create_audit_event","width":1,"scale":1.1,"position":"top"}}'></span>
+            <span class="fragment" data-diagram-state='{"tooltip":null,"highlight":{"tags":["Api.Authn"]}}'></span>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["Api.Authz","Api.Rbac"]},"tooltip":{"slug":"Rbac","tab":"check_serviceaccount_permissions","width":1,"scale":1.3,"position":"bottom"}}'></span>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["Api.Admission"]},"tooltip":{"slug":"Psa","tab":"warning_on_create","width":1,"scale":1.3,"position":"bottom","connector":false,"marker":false}}'></span>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 12 (2½ min)</b></li>
+              <li>▶ audit 03:40: storefront token → create pod → 201</li>
+              <li>▶ authn: whoami → storefront SA. Valid ≠ legit</li>
+              <li>▶ RBAC: create pods. Never needed. The broken link</li>
+              <li>fix the permission. No API use → automountServiceAccountToken: false</li>
+              <li>▶ PSA (enforces PSS): restricted only warned. Enforce → rejected</li>
+              <li>stricter rules: Kyverno (images, pods)</li>
+              <li>→ What could it reach?</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="chapter-slide is-protect" data-background-color="#0b1521" data-transition="fade" data-transition-speed="slow">
+          <h2 class="chapter-title"><span class="phase">Protect</span>Network</h2>
+          <p class="chapter-question">What could it reach?</p>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 10 (quick)</b></li>
+            </ul>
+          </aside>
+        </section>
+
+        <section
+          id="prevent-network"
+          class="diagram-step"
+          data-diagram-state-url="https://kubesec-diagram.github.io/?tags=open&filter-hide-tags=pri-1,pri-2,pri-3,info,_.Area.NetworkUnderlay,_.Frame.NetworkUnderlay,_.Item.CiliumClusterMesh,_.Item.CiliumEgressGatewayPolicy,_.Item.ClusterNetworkPolicy,_.Item.L3IpCidrBased,_.Item.NetworkPolicyServiceMeshConfig,_.Item.OtherClusters,_.Item.OtherNodeNetwork,_.Item.Port80,_.Item.EgressGatewayIp1,_.Traffic.Ingress,Access,Api,CertManager,Cnapp,ControlPlane,CronJob,CustomOperator,Ingress,legend,Logging.Api,Logging.Instrumentation,Logging.Pod,Logging.Service,Namespace,Network.Cni.HostNetwork,Network.Cni.Underlay,Network.Ingress,Network.Service.ClusterIp,Network.Service.EndpointSlice,Node.Roles,Node.RuntimeSecurity,ProcessSecurity,SupplyChain,Traditional,Workload&menu=true"
+          data-diagram-state='{"camera":{"focus":{"tags":["Network.Policy","Network.Egress"]},"padding":0.05}}'
+          data-transition="fade" data-transition-speed="slow"
+          data-background-transition="fade"
+        >
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #22c55e">
+              <h2><span class="phase">Protect</span>Network</h2>
+              <p>Default deny worked. DNS was the open door.</p>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+            <span class="fragment" data-diagram-state='{"highlight":{"tags":["Network.Policy"]},"tooltip":{"slug":"NsDefaultDeny","tab":"deny_all_traffic","width":0.4,"scale":1.3,"position":"top-left","connector":false}}'></span>
+            <span class="fragment" data-diagram-state='{"tooltip":{"slug":"SecureCni","tab":"dropped_flow","width":1,"scale":1.3,"position":"top","connector":false}}'></span>
+            <span class="fragment" data-diagram-state='{"tooltip":{"slug":"NetworkControl","tab":"cluster_wide_policies","width":1,"scale":1.1,"position":"top","connector":false}}'></span>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 9 (2 min)</b></li>
+              <li>It got in. What could it reach?</li>
+              <li>▶ default deny in shop: nothing in or out unless allowed</li>
+              <li>▶ it tried: cache-warmer → payments-proxy DROPPED 03:44. Walls held</li>
+              <li>▶ cluster-wide: corp LAN denied. But DNS open for every pod, any name ("*")</li>
+              <li>"*" = why Hubble saw it AND why it passed</li>
+              <li>pod → CoreDNS → unbound → internet. It never talked out itself</li>
+              <li>fix: toFQDNs per app, or block cdnx at unbound</li>
+              <li>→ Now we know enough to call back</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section id="call-back" class="wake-up-slide is-long-call" data-background-color="#190e16" data-transition="fade">
+          <p class="wake-up-time">04:12</p>
+          <h1>You call back.</h1>
+          <div class="call">
+            <p class="call-line is-you fragment fade-up">It's a pod. shop/cache-warmer, on worker-05.</p>
+            <p class="call-line is-them fragment fade-up">One of ours?</p>
+            <p class="call-line is-you fragment fade-up">No. Not in git, no Deployment. Created at 03:40, straight through the API.</p>
+            <p class="call-line is-them fragment fade-up">By whom?</p>
+            <p class="call-line is-you fragment fade-up">With the storefront app's own token. It was allowed to create pods.</p>
+            <p class="call-line is-you fragment fade-up">Falco saw it at 03:41.</p>
+            <p class="call-line is-them fragment fade-up">Can we stop it?</p>
+            <p class="call-line is-you fragment fade-up">Checkpointed, then deleted. cdnx is blocked. We look at it tomorrow.</p>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 8 (1 min)</b></li>
+              <li>Same call. Different storyline</li>
+              <li>checkpoint = evidence kept, pod gone</li>
+              <li>tomorrow: pod, token, permission</li>
+            </ul>
+          </aside>
+        </section>
+
+        <!-- Wrap-up -->
+
+        <section id="tour" class="diagram-step" data-diagram-view="full-map" data-diagram-state='{"hiddenTags":["pri-1","pri-2","pri-3","info"]}' data-transition="none" data-background-transition="none">
+          <div class="diagram-frame">
+            <header class="view-overlay" style="--panel-border: #8b5cf6">
+              <h2>The rest of the map</h2>
+              <div class="tour-captions">
+                <p class="fragment fade-out" data-fragment-index="1">Every box is a control point.</p>
+                <p class="fragment current-visible" data-fragment-index="1" data-diagram-state='{"highlight":{"tags":["Ingress","_.Item.NamespaceIngress","_.Traffic.Ingress"]},"camera":{"focus":{"tags":["Ingress"]},"padding":0.1}}'>Ingress / Gateway API: an F5 or NetScaler built into the cluster. TLS, routing, auth, rate limits and WAF, per route.</p>
+                <p class="fragment current-visible" data-fragment-index="2" data-diagram-state='{"highlight":{"tags":["Network.ServiceMesh"]},"camera":{"focus":{"tags":["Network.ServiceMesh"]},"padding":0.15}}'>Service mesh: an identity on every call, mTLS between pods.</p>
+                <p class="fragment current-visible" data-fragment-index="3" data-diagram-state='{"highlight":{"tags":["CertManager","_.Item.ClusterSecretCertificate2"]},"camera":{"focus":{"tags":["CertManager","_.Item.ClusterSecretCertificate2"]},"padding":0.15}}'>cert-manager: who may mint a certificate for your domain?</p>
+                <p class="fragment current-visible" data-fragment-index="4" data-diagram-state='{"highlight":{"tags":["Network.Egress.Gateway","_.Item.L3IpCidrBased","_.Item.EgressGatewayIp1"],"ids":["cell-2NIop3rW37v0lhN0G3K2-83"]},"camera":{"focus":{"tags":["Network.Egress.Gateway","_.Item.L3IpCidrBased","_.Item.EgressGatewayIp1"],"ids":["cell-2NIop3rW37v0lhN0G3K2-83"]},"padding":0.15}}'>Egress gateway: selected pods leave through a fixed IP. Your firewall can tell which app it is.</p>
+                <p class="fragment current-visible" data-fragment-index="5" data-diagram-state='{"highlight":{"tags":["CustomOperator"]},"camera":{"focus":{"tags":["CustomOperator"]},"padding":0.15}}'>Operators: Kubernetes as an engine. Define your own objects, and get the API, RBAC and audit log for free.</p>
+                <p class="fragment current-visible" data-fragment-index="6" data-diagram-state='{"highlight":{"tags":["ProcessSecurity.Namespaces","ProcessSecurity.Cgroups","ProcessSecurity.Seccomp","ProcessSecurity.Mac","ProcessSecurity.RunPolicy"]},"camera":{"focus":{"tags":["ProcessSecurity.Namespaces","ProcessSecurity.Cgroups","ProcessSecurity.Seccomp","ProcessSecurity.Mac","ProcessSecurity.RunPolicy"]},"padding":0.15}}'>The walls: os-namespaces, cgroups, seccomp, AppArmor/SELinux, run policies.</p>
+                <p class="fragment current-visible" data-fragment-index="7" data-diagram-state='{"highlight":{"tags":["Traditional"]},"camera":{"focus":{"tags":["Traditional"]},"padding":0.15}}'>EDR, firewalls, hardening: they see nodes and IPs, not pods and identities.</p>
+              </div>
+            </header>
+            <div data-diagram-slot data-prevent-swipe></div>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 7 (1½ min)</b></li>
+              <li>Traditional: "This picture is familiar to everyone here. The world to the right is still new for many of us. Some things will live in this yellow box for years to come. But more and more of what we protect is moving over there."</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section id="take-the-map" class="story-slide" data-background-color="#0b1521" data-transition="fade">
+          <div class="story-shell">
+            <p class="story-kicker">AN OPEN-SOURCE PROJECT</p>
+            <h2 class="story-title">Something to talk around</h2>
+            <p class="story-lead">Now I use it to meet security halfway. It is not the answer, just a place to start the conversation.</p>
+            <div class="story-grid is-tri">
+              <div class="story-card">
+                <h3>Look at it together</h3>
+                <p>Next to your own architecture. Hide what you don&rsquo;t run, and talk about the rest.</p>
+              </div>
+              <div class="story-card">
+                <h3>On your phone</h3>
+                <p>Open it on the bus. Tap a box to see what it does.</p>
+              </div>
+              <div class="story-card">
+                <h3>Yours to use</h3>
+                <p>MIT licensed. Use it, change it, or draw your own.</p>
+              </div>
+            </div>
+            <p class="story-lead questions-url"><span aria-hidden="true">🌐</span> kubesec-diagram.github.io</p>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 5 (1 min)</b></li>
+              <li>Not a standard, not a product</li>
+              <li>"If it helps one discussion, it did its job."</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section id="questions" class="story-slide questions-slide" data-background-color="#0b1521" data-transition="fade">
+          <div class="story-shell">
+            <p class="story-kicker">THANK YOU</p>
+            <h2 class="story-title">Questions?</h2>
+            <p class="story-lead questions-url">kubesec-diagram.github.io</p>
+            <ul class="contact">
+              <li>Lars Solberg</li>
+              <li><span class="contact-label">Signal</span> lars.85</li>
+            </ul>
+          </div>
+          <aside class="notes">
+            <ul>
+              <li><b>⏱ left 4 (Q&amp;A)</b></li>
+            </ul>
+          </aside>
+        </section>
+      </div>
+    </div>
+  </body>
+</html>
